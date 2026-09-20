@@ -5,6 +5,9 @@ import { UIRenderer } from '../renderer/ui';
 import { GameManager } from './state';
 import { getHerbByName } from '../herbs';
 import { resumeAudio, playDrawerSound, playDropSound, playPointerSound, playErrorSound, playSuccessSound } from '../audio/synth';
+import { InventoryLedger } from '../ledger/inventory';
+import { loadLedger, saveLedger } from '../ledger/storage';
+import { LedgerPanel } from '../ledger/panel';
 
 export class ApothecaryGame {
   canvas: GameCanvas;
@@ -12,16 +15,25 @@ export class ApothecaryGame {
   scale: ScaleRenderer;
   ui: UIRenderer;
   game: GameManager;
+  ledgerPanel: LedgerPanel;
   animId = 0;
   mouseX = 0;
   mouseY = 0;
+  /** 台账本打开时游戏暂停 */
+  ledgerOpen = false;
 
-  constructor(canvasId: string) {
+  constructor(canvasId: string, ledger?: InventoryLedger) {
     this.canvas = new GameCanvas(canvasId);
     this.cabinet = new CabinetRenderer();
     this.scale = new ScaleRenderer();
     this.ui = new UIRenderer();
-    this.game = new GameManager();
+    this.game = new GameManager(ledger ?? loadLedger());
+    this.game.onLedgerChange = () => saveLedger(this.game.ledger);
+    this.ledgerPanel = new LedgerPanel({
+      ledger: this.game.ledger,
+      onChange: () => saveLedger(this.game.ledger),
+      onToggle: open => { this.ledgerOpen = open; },
+    });
     this.setupInput();
     this.resize();
     this.loop = this.loop.bind(this);
@@ -41,7 +53,7 @@ export class ApothecaryGame {
 
   loop(now: number): void {
     this.animId = requestAnimationFrame(this.loop);
-    this.game.tick(now);
+    if (!this.ledgerOpen) this.game.tick(now);
     this.scale.animate();
     this.render();
   }
@@ -54,6 +66,7 @@ export class ApothecaryGame {
 
     if (this.game.phase === 'menu') {
       this.renderMenu(ctx, w, h);
+      this.drawLedgerButton(ctx, w);
       return;
     }
 
@@ -61,6 +74,7 @@ export class ApothecaryGame {
     ctx.fillRect(0, 0, w, h);
 
     this.cabinet.draw(ctx);
+    this.drawLowStock(ctx);
     this.scale.draw(ctx, this.game.currentWeight, this.game.zeroOffset);
 
     if (this.game.prescription) {
@@ -73,6 +87,11 @@ export class ApothecaryGame {
 
     if (this.game.levelConfig.requireTare) {
       this.ui.drawTareButton(ctx, this.scale.x + this.scale.w - 60, this.scale.y + this.scale.h + 10, false);
+    }
+
+    this.drawLedgerButton(ctx, w);
+    if (this.game.isBlockedActive()) {
+      this.drawBlockedBanner(ctx, w, this.game.blockedReason!);
     }
 
     if (this.game.currentHerb) {
@@ -113,6 +132,67 @@ export class ApothecaryGame {
   renderMenu(ctx: CanvasRenderingContext2D, w: number, h: number): void {
     const save = loadSaveData();
     this.ui.drawMenu(ctx, w, h, save.highestScore, save.highestLevel);
+  }
+
+  /** 台账按钮位置（右上角，所有界面通用） */
+  ledgerButtonRect(w: number): { x: number; y: number; w: number; h: number } {
+    return { x: w - 150, y: 8, w: 140, h: 34 };
+  }
+
+  drawLedgerButton(ctx: CanvasRenderingContext2D, w: number): void {
+    const { x, y, w: bw, h: bh } = this.ledgerButtonRect(w);
+    const lowCount = this.game.ledger.getReorderList().length;
+    ctx.fillStyle = '#6b4e23';
+    ctx.fillRect(x, y, bw, bh);
+    ctx.strokeStyle = '#d4a574';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, bw, bh);
+    ctx.fillStyle = '#f5e6d3';
+    ctx.font = 'bold 15px "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('📒 药柜台账 (L)', x + bw / 2, y + bh / 2 + 1);
+    if (lowCount > 0) {
+      ctx.fillStyle = '#c0392b';
+      ctx.beginPath();
+      ctx.arc(x + bw - 8, y + 8, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillText(`${lowCount}`, x + bw - 8, y + 9);
+    }
+  }
+
+  drawBlockedBanner(ctx: CanvasRenderingContext2D, w: number, message: string): void {
+    ctx.font = 'bold 16px "Microsoft YaHei", sans-serif';
+    const bw = Math.max(340, ctx.measureText(message).width + 48);
+    const x = (w - bw) / 2;
+    const y = 56;
+    ctx.fillStyle = 'rgba(142,36,21,0.94)';
+    ctx.fillRect(x, y, bw, 40);
+    ctx.strokeStyle = '#f0c9b0';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, bw, 40);
+    ctx.fillStyle = '#fdeee8';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(message, x + bw / 2, y + 20);
+  }
+
+  /** 掉到最低存量线下的抽屉画上红框，提醒伙计 */
+  drawLowStock(ctx: CanvasRenderingContext2D): void {
+    for (const d of this.cabinet.drawers) {
+      if (d.herb && this.game.ledger.isLow(d.herb)) {
+        ctx.strokeStyle = `rgba(220,60,40,${0.55 + Math.sin(performance.now() / 350) * 0.25})`;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(d.x + 1, d.y + 1, d.w - 2, d.h - 2);
+        ctx.fillStyle = '#c0392b';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText('缺', d.x + 4, d.y + 3);
+      }
+    }
   }
 
   drawHerbPile(ctx: CanvasRenderingContext2D, x: number, y: number, color: string, size: number): void {
@@ -183,11 +263,24 @@ export class ApothecaryGame {
     });
 
     window.addEventListener('keydown', e => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      // 在台账表单里打字时，按键只属于表单，不驱动游戏（避免输入 L 关账本、方向键带动秤）
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
       this.handleKey(e.key);
     });
   }
 
   handlePointerDown(x: number, y: number): void {
+    if (this.ledgerOpen) return;
+
+    const lb = this.ledgerButtonRect(this.canvas.width);
+    if (x >= lb.x && x <= lb.x + lb.w && y >= lb.y && y <= lb.y + lb.h) {
+      this.ledgerPanel.open();
+      playPointerSound();
+      return;
+    }
+
     if (this.game.phase === 'menu') {
       const btn = this.ui.buttonRects.find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
       if (btn) {
@@ -290,6 +383,12 @@ export class ApothecaryGame {
   }
 
   handleKey(key: string): void {
+    if (key === 'l' || key === 'L') {
+      this.ledgerPanel.toggle();
+      return;
+    }
+    if (this.ledgerOpen) return;
+
     if (this.game.phase === 'menu') {
       if (key === 'Enter' || key === ' ') {
         this.game.startLevel(1, false);
@@ -319,7 +418,9 @@ export class ApothecaryGame {
       if (key === ' ' || key === 'Enter') {
         const result = this.game.confirmWeight();
         if (result) {
-          if (result.ok) {
+          if (result.blocked) {
+            playErrorSound();
+          } else if (result.ok) {
             playSuccessSound();
           } else {
             playErrorSound();

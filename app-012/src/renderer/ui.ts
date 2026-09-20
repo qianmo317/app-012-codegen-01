@@ -313,8 +313,8 @@ export class UIRenderer {
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    ctx.fillText('操作: 1-9选抽屉 / 拖拽药材到秤盘 / 滚轮微调 / 空格确认 / Z归零', x + 10, y + 10);
-    ctx.fillText('目标: 按处方抓药，误差在允许范围内', x + 10, y + 30);
+    ctx.fillText('操作: 1-9选抽屉 / 拖拽药材到秤盘 / 滚轮微调 / 空格确认 / Z归零 / L查台账补货', x + 10, y + 10);
+    ctx.fillText('目标: 按处方抓药，误差在允许范围内（库存不足会被拦住，先去台账补货）', x + 10, y + 30);
     ctx.fillText('注意: 先煎/后下药要单独分包', x + 10, y + 48);
   }
 
