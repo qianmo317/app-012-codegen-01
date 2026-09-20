@@ -1,4 +1,7 @@
+import type { InventoryState } from './inventory';
+
 const STORAGE_KEY = 'apothecary-weighing-v1';
+const INVENTORY_KEY = 'apothecary-inventory-v1';
 
 export interface SaveData {
   highestScore: number;
@@ -34,6 +37,39 @@ export function saveSave(data: SaveData): void {
 export function clearSave(): void {
   try {
     localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export function loadInventory(): InventoryState | null {
+  try {
+    const raw = localStorage.getItem(INVENTORY_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw) as InventoryState;
+    if (!data || typeof data.seq !== 'number' || !Array.isArray(data.entries) || !data.minStock || typeof data.minStock !== 'object') {
+      return null;
+    }
+    for (const e of data.entries) {
+      if (!Array.isArray(e.corrections)) e.corrections = [];
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export function saveInventory(state: InventoryState): void {
+  try {
+    localStorage.setItem(INVENTORY_KEY, JSON.stringify(state));
+  } catch {
+    // ignore storage error
+  }
+}
+
+export function clearInventory(): void {
+  try {
+    localStorage.removeItem(INVENTORY_KEY);
   } catch {
     // ignore
   }

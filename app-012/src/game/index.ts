@@ -4,6 +4,7 @@ import { ScaleRenderer } from '../renderer/scale';
 import { UIRenderer } from '../renderer/ui';
 import { GameManager } from './state';
 import { getHerbByName } from '../herbs';
+import { getAllTotals, getRestockList, closeDay, todayString } from '../inventory';
 import { resumeAudio, playDrawerSound, playDropSound, playPointerSound, playErrorSound, playSuccessSound } from '../audio/synth';
 
 export class ApothecaryGame {
@@ -51,9 +52,22 @@ export class ApothecaryGame {
     const w = this.canvas.width;
     const h = this.canvas.height;
     ctx.clearRect(0, 0, w, h);
+    this.ui.buttonRects = [];
 
     if (this.game.phase === 'menu') {
       this.renderMenu(ctx, w, h);
+      return;
+    }
+
+    if (this.game.phase === 'ledger') {
+      this.ui.drawLedger(ctx, w, h, {
+        date: todayString(),
+        totals: getAllTotals(this.game.inventory),
+        restockList: getRestockList(this.game.inventory),
+        close: closeDay(this.game.inventory, todayString()),
+        entries: [...this.game.inventory.entries].reverse(),
+        selectedEntryId: this.game.ledgerSelectedEntry,
+      });
       return;
     }
 
@@ -70,6 +84,21 @@ export class ApothecaryGame {
     this.ui.drawStatus(ctx, this.game.state.level, this.game.state.score, this.game.state.combo, this.game.state.queue, this.game.state.satisfaction, this.game.getTimeLeft());
     this.ui.drawPackageArea(ctx, w, h, this.game.packages);
     this.ui.drawInstructions(ctx, w, h);
+
+    if (this.game.phase === 'playing') {
+      this.ui.drawLedgerButton(ctx, w - 116, 8);
+    }
+
+    if (this.game.stockBlockMsg) {
+      const bw = Math.min(w - 40, 560);
+      ctx.fillStyle = 'rgba(178, 34, 34, 0.92)';
+      ctx.fillRect((w - bw) / 2, h - 176, bw, 36);
+      ctx.fillStyle = '#fff';
+      ctx.font = '15px "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(this.game.stockBlockMsg, w / 2, h - 158);
+    }
 
     if (this.game.levelConfig.requireTare) {
       this.ui.drawTareButton(ctx, this.scale.x + this.scale.w - 60, this.scale.y + this.scale.h + 10, false);
@@ -197,6 +226,26 @@ export class ApothecaryGame {
         } else if (btn.action === 'endless') {
           this.game.startLevel(1, true);
           this.cabinet.setHerbs(this.game.herbs);
+        } else if (btn.action === 'open-ledger') {
+          this.game.openLedger();
+        }
+      }
+      return;
+    }
+
+    if (this.game.phase === 'ledger') {
+      const btn = this.ui.buttonRects.find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+      if (btn) {
+        const action = btn.action;
+        if (action === 'close-ledger') {
+          this.game.closeLedger();
+        } else if (action.startsWith('restock:')) {
+          if (this.game.restockHerb(action.slice('restock:'.length))) playSuccessSound();
+        } else if (action.startsWith('entry:')) {
+          this.game.selectLedgerEntry(action.slice('entry:'.length));
+        } else if (action.startsWith('adj:')) {
+          this.game.adjustSelectedEntry(parseFloat(action.slice('adj:'.length)));
+          playPointerSound();
         }
       }
       return;
@@ -224,12 +273,19 @@ export class ApothecaryGame {
           this.cabinet.setHerbs(this.game.herbs);
         } else if (btn.action === 'menu') {
           this.game.phase = 'menu';
+        } else if (btn.action === 'open-ledger') {
+          this.game.openLedger();
         }
       }
       return;
     }
 
     if (this.game.phase === 'playing') {
+      const ledgerBtn = this.ui.buttonRects.find(b => b.action === 'open-ledger' && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+      if (ledgerBtn) {
+        this.game.openLedger();
+        return;
+      }
       const drawer = this.cabinet.getDrawerAt(x, y);
       if (drawer && drawer.herb) {
         const ok = this.game.selectDrawer(drawer.herb);
@@ -290,6 +346,11 @@ export class ApothecaryGame {
   }
 
   handleKey(key: string): void {
+    if (this.game.phase === 'ledger') {
+      if (key === 'Escape') this.game.closeLedger();
+      return;
+    }
+
     if (this.game.phase === 'menu') {
       if (key === 'Enter' || key === ' ') {
         this.game.startLevel(1, false);

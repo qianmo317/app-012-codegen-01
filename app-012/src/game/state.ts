@@ -3,8 +3,33 @@ import { getLevelConfig } from '../levels';
 import { generatePrescription, generateReviewQuestion } from '../prescription';
 import { judgeWeight, getWeightStatus } from '../weighing';
 import { scoreRound } from '../scoring';
-import { getRandomHerbs } from '../herbs';
+import { getRandomHerbs, HERBS } from '../herbs';
 import type { HerbMeta } from '../types';
+import {
+  createInventory,
+  canDispense,
+  dispense,
+  restock,
+  correctEntry,
+  getStock,
+  round1,
+  todayString,
+  DEFAULT_MIN_STOCK,
+  DEFAULT_INITIAL_STOCK,
+  RESTOCK_TARGET,
+} from '../inventory';
+import type { InventoryState } from '../inventory';
+import { loadInventory, saveInventory } from '../storage';
+
+function initInventory(): InventoryState {
+  const saved = loadInventory();
+  if (saved) return saved;
+  return createInventory(
+    HERBS.map(h => ({ name: h.name, minStock: DEFAULT_MIN_STOCK, initialStock: DEFAULT_INITIAL_STOCK })),
+    todayString(),
+    Date.now()
+  );
+}
 
 export class GameManager {
   state: GameState = {
@@ -43,6 +68,12 @@ export class GameManager {
   onScale = false;
   flashingDrawer: string | null = null;
   flashTime = 0;
+
+  inventory: InventoryState = initInventory();
+  ledgerReturnPhase: GamePhase = 'menu';
+  ledgerSelectedEntry: string | null = null;
+  stockBlockMsg: string | null = null;
+  stockBlockTime = 0;
 
   startLevel(level: number, endless = false): void {
     this.endless = endless;
@@ -87,6 +118,11 @@ export class GameManager {
       this.flashTime -= dt;
       if (this.flashTime <= 0) this.flashingDrawer = null;
     }
+
+    if (this.stockBlockTime > 0) {
+      this.stockBlockTime -= dt;
+      if (this.stockBlockTime <= 0) this.stockBlockMsg = null;
+    }
   }
 
   selectDrawer(herb: string): boolean {
@@ -95,6 +131,13 @@ export class GameManager {
     if (!needed) {
       this.flashingDrawer = herb;
       this.flashTime = 0.5;
+      return false;
+    }
+    if (!canDispense(this.inventory, herb, needed.grams)) {
+      this.flashingDrawer = herb;
+      this.flashTime = 0.5;
+      this.stockBlockMsg = `${herb} 账上只剩 ${getStock(this.inventory, herb)}g，不够抓 ${needed.grams}g，请先到账本补货`;
+      this.stockBlockTime = 2.5;
       return false;
     }
     this.drawerOpen.add(herb);
@@ -121,9 +164,17 @@ export class GameManager {
     if (!this.currentHerb || !this.prescription) return null;
     const result = judgeWeight(this.currentWeight, this.targetGrams, this.levelConfig.tolerance);
     result.herb = this.currentHerb;
-    this.results.push(result);
 
     const status = getWeightStatus(result, this.levelConfig.tolerance);
+
+    // 称合格了但账上不够扣：拦住不让抓，药还在秤上，可以减了再称
+    if (status !== 'fail' && !canDispense(this.inventory, this.currentHerb, this.currentWeight)) {
+      this.stockBlockMsg = `${this.currentHerb} 账上只剩 ${getStock(this.inventory, this.currentHerb)}g，称不了 ${this.currentWeight}g，请减药或先到账本补货`;
+      this.stockBlockTime = 2.5;
+      return null;
+    }
+
+    this.results.push(result);
     const timeLimit = this.levelConfig.timeLimit;
     const breakdown = scoreRound(result, this.levelConfig.tolerance, this.state.combo, this.timeUsed, timeLimit);
 
@@ -137,6 +188,8 @@ export class GameManager {
       if (item) {
         this.packages.push({ herb: item.herb, grams: this.currentWeight, decoct: item.decoct });
       }
+      const deducted = dispense(this.inventory, this.currentHerb, this.currentWeight, todayString(), Date.now());
+      if (deducted.ok) saveInventory(this.inventory);
     }
 
     this.drawerOpen.delete(this.currentHerb);
@@ -217,5 +270,45 @@ export class GameManager {
 
   isDrawerOpen(herb: string): boolean {
     return this.drawerOpen.has(herb);
+  }
+
+  openLedger(): void {
+    if (this.phase === 'ledger') return;
+    this.ledgerReturnPhase = this.phase;
+    this.ledgerSelectedEntry = null;
+    this.phase = 'ledger';
+  }
+
+  closeLedger(): void {
+    if (this.phase !== 'ledger') return;
+    this.phase = this.ledgerReturnPhase;
+    this.ledgerSelectedEntry = null;
+    // 账本停留期间不计入关卡用时
+    this.lastTick = performance.now();
+  }
+
+  /** 补货：补到目标量，记一笔带日期的补进流水 */
+  restockHerb(herb: string): boolean {
+    const amount = round1(RESTOCK_TARGET - getStock(this.inventory, herb));
+    if (amount <= 0) return false;
+    const entry = restock(this.inventory, herb, amount, todayString(), Date.now());
+    if (!entry) return false;
+    saveInventory(this.inventory);
+    return true;
+  }
+
+  selectLedgerEntry(entryId: string): void {
+    this.ledgerSelectedEntry = this.ledgerSelectedEntry === entryId ? null : entryId;
+  }
+
+  /** 改账：对选中的流水微调数量，改前改后与时间都会留痕 */
+  adjustSelectedEntry(delta: number): void {
+    if (!this.ledgerSelectedEntry) return;
+    const entry = this.inventory.entries.find(e => e.id === this.ledgerSelectedEntry);
+    if (!entry) return;
+    const after = round1(entry.amount + delta);
+    if (after <= 0) return;
+    const correction = correctEntry(this.inventory, entry.id, after, Date.now(), '手工改账');
+    if (correction) saveInventory(this.inventory);
   }
 }

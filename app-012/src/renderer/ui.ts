@@ -1,4 +1,15 @@
 import type { Prescription, WeighResult } from '../types';
+import type { HerbTotals, RestockItem, DayClose, LedgerEntry } from '../inventory';
+import { RESTOCK_TARGET } from '../inventory';
+
+export interface LedgerViewData {
+  date: string;
+  totals: HerbTotals[];
+  restockList: RestockItem[];
+  close: DayClose;
+  entries: LedgerEntry[];
+  selectedEntryId: string | null;
+}
 
 export class UIRenderer {
   prescriptionX: number = 20;
@@ -135,6 +146,7 @@ export class UIRenderer {
     const buttons = [
       { label: '开始游戏', action: 'start' },
       { label: '无尽模式', action: 'endless' },
+      { label: '药柜账本', action: 'open-ledger' },
     ];
 
     this.buttonRects = [];
@@ -161,7 +173,7 @@ export class UIRenderer {
 
     ctx.fillStyle = '#888';
     ctx.font = '14px sans-serif';
-    ctx.fillText(`最高分: ${highestScore}  最高关卡: ${highestLevel}`, cx, cy + 120);
+    ctx.fillText(`最高分: ${highestScore}  最高关卡: ${highestLevel}`, cx, cy + 170);
   }
 
   drawReview(ctx: CanvasRenderingContext2D, canvasW: number, canvasH: number, herb: string, options: number[], selected: number | null, result: boolean | null): void {
@@ -248,24 +260,32 @@ export class UIRenderer {
 
     this.buttonRects = [];
     const btnLabel = passed ? '下一关' : '重试';
-    const bx = cx - 60;
     const by = cy + 140;
-    const bw = 120;
-    const bh = 40;
 
     ctx.fillStyle = '#6b4e23';
-    ctx.fillRect(bx, by, bw, bh);
+    ctx.fillRect(cx - 130, by, 120, 40);
     ctx.strokeStyle = '#d4a574';
     ctx.lineWidth = 2;
-    ctx.strokeRect(bx, by, bw, bh);
+    ctx.strokeRect(cx - 130, by, 120, 40);
 
     ctx.fillStyle = '#f5e6d3';
     ctx.font = '18px "Microsoft YaHei", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(btnLabel, cx, by + bh / 2);
+    ctx.fillText(btnLabel, cx - 70, by + 20);
 
-    this.buttonRects.push({ x: bx, y: by, w: bw, h: bh, action: passed ? 'next' : 'retry' });
+    this.buttonRects.push({ x: cx - 130, y: by, w: 120, h: 40, action: passed ? 'next' : 'retry' });
+
+    ctx.fillStyle = '#6b4e23';
+    ctx.fillRect(cx + 10, by, 120, 40);
+    ctx.strokeStyle = '#d4a574';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cx + 10, by, 120, 40);
+
+    ctx.fillStyle = '#f5e6d3';
+    ctx.fillText('账本', cx + 70, by + 20);
+
+    this.buttonRects.push({ x: cx + 10, y: by, w: 120, h: 40, action: 'open-ledger' });
   }
 
   drawGameOver(ctx: CanvasRenderingContext2D, canvasW: number, canvasH: number, score: number, level: number): void {
@@ -329,5 +349,217 @@ export class UIRenderer {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('归零', x + 30, y + 16);
+  }
+
+  /** 抓药界面顶部的账本入口 */
+  drawLedgerButton(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+    ctx.fillStyle = '#6b4e23';
+    ctx.fillRect(x, y, 100, 32);
+    ctx.strokeStyle = '#d4a574';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, 100, 32);
+    ctx.fillStyle = '#f5e6d3';
+    ctx.font = '15px "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('账本', x + 50, y + 16);
+    this.buttonRects.push({ x, y, w: 100, h: 32, action: 'open-ledger' });
+  }
+
+  drawLedger(ctx: CanvasRenderingContext2D, canvasW: number, canvasH: number, data: LedgerViewData): void {
+    this.buttonRects = [];
+    const pad = 20;
+    const colW = (canvasW - pad * 3) / 2;
+    const leftX = pad;
+    const rightX = pad * 2 + colW;
+
+    ctx.fillStyle = '#1a1208';
+    ctx.fillRect(0, 0, canvasW, canvasH);
+
+    ctx.fillStyle = '#d4a574';
+    ctx.font = 'bold 24px "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('药柜账本', leftX, 34);
+    ctx.fillStyle = '#888';
+    ctx.font = '14px "Microsoft YaHei", sans-serif';
+    ctx.fillText(`${data.date} 收工`, leftX + 130, 36);
+
+    this.drawLedgerCloseButton(ctx, canvasW - pad - 88, 16);
+
+    // 库存总账
+    const rowH = 20;
+    const rowsPerCol = Math.ceil(data.totals.length / 2);
+    const ledgerH = 44 + rowsPerCol * rowH + 10;
+    this.drawPanel(ctx, leftX, 64, colW, ledgerH, '库存总账（余 / 抓 / 补 / 底）');
+    const innerW = (colW - 24) / 2;
+    ctx.font = '11px "Microsoft YaHei", sans-serif';
+    data.totals.forEach((t, i) => {
+      const col = Math.floor(i / rowsPerCol);
+      const row = i % rowsPerCol;
+      const cx = leftX + 12 + col * innerW;
+      const cy = 64 + 44 + row * rowH;
+      if (t.belowMin) {
+        ctx.fillStyle = 'rgba(220, 20, 60, 0.12)';
+        ctx.fillRect(cx - 4, cy - 1, innerW, rowH - 2);
+      }
+      ctx.fillStyle = t.belowMin ? '#b22222' : '#333';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(t.herb, cx, cy + 3);
+      ctx.fillText(`余${t.stock} 抓${t.dispensed} 补${t.restocked} 底${t.minStock}`, cx + 56, cy + 3);
+    });
+
+    // 收工汇总：当天与最近七天
+    const sumY = 64 + ledgerH + 12;
+    const sumH = canvasH - sumY - pad;
+    this.drawPanel(ctx, leftX, sumY, colW, sumH, '收工汇总 · 消耗排行');
+    const halfW = (colW - 36) / 2;
+    this.drawConsumptionList(ctx, leftX + 12, sumY + 34, halfW, '今日消耗', data.close.today);
+    this.drawConsumptionList(ctx, leftX + 24 + halfW, sumY + 34, halfW, '近7日消耗', data.close.week);
+
+    // 待补清单
+    const restockRows = Math.min(6, Math.max(1, data.restockList.length));
+    const restockH = 34 + restockRows * 26 + (data.restockList.length > 6 ? 18 : 0) + 10;
+    this.drawPanel(ctx, rightX, 64, colW, restockH, '待补清单（低于最低存量）');
+    ctx.textBaseline = 'middle';
+    if (data.restockList.length === 0) {
+      ctx.fillStyle = '#228b22';
+      ctx.font = '13px "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('库存充足，无需补货', rightX + 12, 64 + 34 + 13);
+    } else {
+      data.restockList.slice(0, 6).forEach((r, i) => {
+        const ry = 64 + 34 + i * 26 + 13;
+        ctx.fillStyle = '#b22222';
+        ctx.font = '13px "Microsoft YaHei", sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${r.herb}  余${r.stock}g / 底${r.minStock}g  缺${r.shortage}g`, rightX + 12, ry);
+        this.drawSmallButton(ctx, rightX + colW - 88, ry - 11, 76, 22, `补至${RESTOCK_TARGET}g`, `restock:${r.herb}`);
+      });
+      if (data.restockList.length > 6) {
+        ctx.fillStyle = '#888';
+        ctx.font = '12px "Microsoft YaHei", sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`…共 ${data.restockList.length} 味待补`, rightX + 12, 64 + 34 + 6 * 26 + 9);
+      }
+    }
+
+    // 最近流水与改账
+    const flowY = 64 + restockH + 12;
+    const flowH = canvasH - flowY - pad;
+    this.drawPanel(ctx, rightX, flowY, colW, flowH, '最近流水（点「改」可改账）');
+    const selected = data.entries.find(e => e.id === data.selectedEntryId) ?? null;
+    const correctionH = selected ? 92 : 0;
+    const maxRows = Math.max(2, Math.min(7, Math.floor((flowH - 34 - correctionH - 8) / 22)));
+    const shown = data.entries.slice(0, maxRows);
+    ctx.font = '12px "Microsoft YaHei", sans-serif';
+    shown.forEach((e, i) => {
+      const ry = flowY + 34 + i * 22 + 11;
+      const isSel = e.id === data.selectedEntryId;
+      if (isSel) {
+        ctx.fillStyle = 'rgba(212, 165, 116, 0.35)';
+        ctx.fillRect(rightX + 6, ry - 10, colW - 12, 21);
+      }
+      ctx.fillStyle = '#333';
+      ctx.textAlign = 'left';
+      const typeLabel = e.type === 'dispense' ? '抓' : '补';
+      const corrected = e.corrections.length > 0 ? `（改${e.corrections.length}次）` : '';
+      ctx.fillText(`${e.date.slice(5)}  ${e.herb}  ${typeLabel} ${e.amount}g${corrected}`, rightX + 12, ry);
+      this.drawSmallButton(ctx, rightX + colW - 52, ry - 10, 40, 20, '改', `entry:${e.id}`);
+    });
+    if (shown.length === 0) {
+      ctx.fillStyle = '#888';
+      ctx.textAlign = 'left';
+      ctx.fillText('暂无流水', rightX + 12, flowY + 34 + 11);
+    }
+
+    if (selected) {
+      const ay = flowY + 34 + shown.length * 22 + 8;
+      ctx.fillStyle = '#8b4513';
+      ctx.font = 'bold 12px "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(`改账：${selected.herb} ${selected.type === 'dispense' ? '抓' : '补'} ${selected.amount}g`, rightX + 12, ay + 8);
+      const deltas = [-5, -1, 1, 5];
+      deltas.forEach((d, i) => {
+        const label = d > 0 ? `+${d}` : `${d}`;
+        this.drawSmallButton(ctx, rightX + 12 + i * 52, ay + 18, 44, 22, label, `adj:${d}`);
+      });
+      ctx.font = '11px "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = '#666';
+      const history = selected.corrections.slice(-3).reverse();
+      history.forEach((c, i) => {
+        const t = new Date(c.time);
+        const hh = String(t.getHours()).padStart(2, '0');
+        const mm = String(t.getMinutes()).padStart(2, '0');
+        ctx.fillText(`${hh}:${mm}  ${c.before}g → ${c.after}g`, rightX + 12 + 4 * 52 + 8, ay + 27 + i * 14);
+      });
+    }
+  }
+
+  private drawPanel(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, title: string): void {
+    ctx.fillStyle = 'rgba(255, 252, 245, 0.95)';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = '#8b6914';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = '#8b4513';
+    ctx.font = 'bold 14px "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(title, x + 12, y + 17);
+  }
+
+  private drawSmallButton(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, label: string, action: string): void {
+    ctx.fillStyle = '#6b4e23';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = '#d4a574';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = '#f5e6d3';
+    ctx.font = '11px "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, x + w / 2, y + h / 2);
+    this.buttonRects.push({ x, y, w, h, action });
+  }
+
+  private drawLedgerCloseButton(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+    ctx.fillStyle = '#6b4e23';
+    ctx.fillRect(x, y, 88, 34);
+    ctx.strokeStyle = '#d4a574';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, 88, 34);
+    ctx.fillStyle = '#f5e6d3';
+    ctx.font = '15px "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('返回', x + 44, y + 17);
+    this.buttonRects.push({ x, y, w: 88, h: 34, action: 'close-ledger' });
+  }
+
+  private drawConsumptionList(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, title: string, items: Array<{ herb: string; grams: number }>): void {
+    ctx.fillStyle = '#8b4513';
+    ctx.font = 'bold 12px "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(title, x, y + 8);
+    const top = items.slice(0, 5);
+    if (top.length === 0) {
+      ctx.fillStyle = '#999';
+      ctx.font = '12px "Microsoft YaHei", sans-serif';
+      ctx.fillText('暂无消耗', x, y + 30);
+      return;
+    }
+    const max = top[0].grams;
+    const barMaxW = w - 96;
+    ctx.font = '12px "Microsoft YaHei", sans-serif';
+    top.forEach((item, i) => {
+      const iy = y + 30 + i * 20;
+      ctx.fillStyle = '#333';
+      ctx.fillText(`${item.herb} ${item.grams}g`, x, iy);
+      ctx.fillStyle = '#d4a574';
+      ctx.fillRect(x + 90, iy - 5, Math.max(2, (item.grams / max) * barMaxW), 10);
+    });
   }
 }
